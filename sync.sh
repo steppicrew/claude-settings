@@ -12,6 +12,7 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_DIR"
 
 VERBOSE=0
+PULLED=0
 
 log()     { echo "[claude-sync] $*"; }
 verbose() { [ "$VERBOSE" -eq 1 ] && echo "[claude-sync] $*" || true; }
@@ -34,12 +35,14 @@ pull_remote() {
 
     if git diff --quiet HEAD origin/main; then
         verbose "Already up to date."
+        PULLED=0
         return
     fi
 
     log "Merging remote changes (local wins on conflict)..."
     if git merge --no-edit origin/main 2>/dev/null; then
         verbose "Merge succeeded cleanly."
+        PULLED=1
         return
     fi
 
@@ -54,6 +57,7 @@ pull_remote() {
         git commit --no-edit -m "chore: merge remote settings (kept local on conflicts)"
         log "Conflict resolution committed."
     fi
+    PULLED=1
 }
 
 push_remote() {
@@ -63,6 +67,8 @@ push_remote() {
 }
 
 restore_plugins() {
+    [ "$PULLED" -eq 0 ] && return
+
     if ! command -v jq &>/dev/null; then
         warn "jq not found — skipping plugin restore."
         return
@@ -76,13 +82,16 @@ restore_plugins() {
 
     # Add missing marketplaces
     if [ -f "$manifests_dir/known_marketplaces.json" ]; then
+        # marketplace list output: "  ❯ name"
+        local registered
+        registered=$(claude plugins marketplace list 2>/dev/null | grep -oP '(?<=❯ )\S+' || true)
         while IFS= read -r entry; do
             local name source_type repo
             name=$(echo "$entry" | jq -r '.name')
             source_type=$(echo "$entry" | jq -r '.source.source')
             if [ "$source_type" = "github" ]; then
                 repo=$(echo "$entry" | jq -r '.source.repo')
-                if claude plugins marketplace list 2>/dev/null | grep -q "^$name"; then
+                if echo "$registered" | grep -qxF "$name"; then
                     verbose "marketplace '$name' already registered."
                 else
                     log "Adding marketplace '$name' ($repo)..."
@@ -96,12 +105,15 @@ restore_plugins() {
 
     # Install missing user-scoped plugins
     if [ -f "$manifests_dir/installed_plugins.json" ]; then
+        # plugin list uses "id" field
+        local installed
+        installed=$(claude plugins list --json 2>/dev/null | jq -r '.[].id' || true)
         while IFS= read -r plugin_key; do
             local is_user
             is_user=$(jq -r --arg k "$plugin_key" '.plugins[$k][] | select(.scope == "user") | .scope' \
                 "$manifests_dir/installed_plugins.json" | head -1)
             if [ -n "$is_user" ]; then
-                if claude plugins list --json 2>/dev/null | jq -e --arg k "$plugin_key" '.[] | select(.name == $k)' &>/dev/null; then
+                if echo "$installed" | grep -qxF "$plugin_key"; then
                     verbose "plugin '$plugin_key' already installed."
                 else
                     log "Installing plugin '$plugin_key'..."
