@@ -6,6 +6,7 @@
 !README.md
 !CLAUDE.md
 !settings.json
+!sync.sh
 
 # Track project memory directories and their contents
 !projects/

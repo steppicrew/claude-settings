@@ -29,15 +29,23 @@ Claude Code will now pick up `CLAUDE.md`, `settings.json`, and all project memor
 
 ## Keeping in sync
 
-```bash
-# Pull latest settings on any machine
-cd ~/git/claude-settings && git pull
+Use `sync.sh` before starting a Claude session and after finishing:
 
-# After Claude Code updates settings or memory files, commit and push
-cd ~/git/claude-settings
-git add -A
-git commit -m "chore: sync claude settings"
-git push
+```bash
+~/git/claude-settings/sync.sh          # pull + push (default)
+~/git/claude-settings/sync.sh pull     # fetch remote and merge (local wins on conflicts)
+~/git/claude-settings/sync.sh push     # commit local changes and push
+```
+
+The script:
+1. Commits any uncommitted local changes
+2. Fetches and merges remote changes
+3. On unresolvable conflicts, keeps the **local version** automatically
+4. Pushes the result
+
+Tip: add an alias to your shell profile:
+```bash
+alias claude-sync='~/git/claude-settings/sync.sh'
 ```
 
 ## Notes
