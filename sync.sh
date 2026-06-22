@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# Sync claude-settings to/from GitHub.
-# Usage: ./sync.sh [push|pull|sync] [-v]
-#   push  — commit local changes and push
-#   pull  — fetch and merge remote, preferring local on conflicts
-#   sync  — pull first, then push (default)
-#   -v    — verbose output
+# Sync claude-settings private config to/from GitHub.
+# Usage: ./sync.sh [push|pull|sync|add-config|switch-config|list-configs] [-v]
+#
+#   push                      — commit local changes and push (active config)
+#   pull                      — fetch and merge remote, restore plugins
+#   sync                      — pull first, then push (default)
+#   add-config <name> <url>   — clone a private config repo into config/<name>
+#   switch-config <name>      — switch active config to config/<name>
+#   list-configs              — list available configs, show active
+#   -v                        — verbose output
 
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$REPO_DIR"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_DIR="$SCRIPT_DIR/config"
+CURRENT_LINK="$CONFIG_DIR/current"
 
 VERBOSE=0
 PULLED=0
@@ -18,29 +23,39 @@ log()     { echo "[claude-sync] $*"; }
 verbose() { [ "$VERBOSE" -eq 1 ] && echo "[claude-sync] $*" || true; }
 warn()    { echo "[claude-sync] WARNING: $*" >&2; }
 
+active_config_dir() {
+    if [ ! -L "$CURRENT_LINK" ]; then
+        echo "No active config. Run: $0 add-config <name> <url>" >&2
+        exit 1
+    fi
+    readlink -f "$CURRENT_LINK"
+}
+
 commit_local_changes() {
-    git add -A
-    if git diff --cached --quiet; then
+    local repo_dir="$1"
+    git -C "$repo_dir" add -A
+    if git -C "$repo_dir" diff --cached --quiet; then
         verbose "No local changes to commit."
     else
         local msg="chore: sync claude settings on $(hostname) at $(date '+%Y-%m-%d %H:%M')"
-        git commit -m "$msg"
+        git -C "$repo_dir" commit -m "$msg"
         log "Committed local changes."
     fi
 }
 
 pull_remote() {
+    local repo_dir="$1"
     verbose "Fetching remote..."
-    git fetch origin
+    git -C "$repo_dir" fetch origin
 
-    if git diff --quiet HEAD origin/main; then
+    if git -C "$repo_dir" diff --quiet HEAD origin/main; then
         verbose "Already up to date."
         PULLED=0
         return
     fi
 
     log "Merging remote changes (local wins on conflict)..."
-    if git merge --no-edit origin/main 2>/dev/null; then
+    if git -C "$repo_dir" merge --no-edit origin/main 2>/dev/null; then
         verbose "Merge succeeded cleanly."
         PULLED=1
         return
@@ -48,25 +63,27 @@ pull_remote() {
 
     # Merge had conflicts — resolve by keeping local version of each conflicted file
     local conflicted
-    conflicted=$(git diff --name-only --diff-filter=U)
+    conflicted=$(git -C "$repo_dir" diff --name-only --diff-filter=U)
     if [ -n "$conflicted" ]; then
         warn "Conflicts in: $(echo "$conflicted" | tr '\n' ' ')"
         warn "Keeping local versions."
-        echo "$conflicted" | xargs git checkout --ours --
-        echo "$conflicted" | xargs git add
-        git commit --no-edit -m "chore: merge remote settings (kept local on conflicts)"
+        echo "$conflicted" | xargs git -C "$repo_dir" checkout --ours --
+        echo "$conflicted" | xargs git -C "$repo_dir" add
+        git -C "$repo_dir" commit --no-edit -m "chore: merge remote settings (kept local on conflicts)"
         log "Conflict resolution committed."
     fi
     PULLED=1
 }
 
 push_remote() {
+    local repo_dir="$1"
     verbose "Pushing to origin..."
-    git push origin main ${VERBOSE:+-v} 2>&1 | { [ "$VERBOSE" -eq 1 ] && cat || grep -E '^\[|^To |^ ' || true; }
+    git -C "$repo_dir" push origin main 2>&1 | grep -E '^To |^ ' || true
     verbose "Push complete."
 }
 
 restore_plugins() {
+    local repo_dir="$1"
     [ "$PULLED" -eq 0 ] && return
 
     if ! command -v jq &>/dev/null; then
@@ -78,11 +95,10 @@ restore_plugins() {
         return
     fi
 
-    local manifests_dir="$REPO_DIR/plugins"
+    local manifests_dir="$repo_dir/plugins"
 
     # Add missing marketplaces
     if [ -f "$manifests_dir/known_marketplaces.json" ]; then
-        # marketplace list output: "  ❯ name"
         local registered
         registered=$(claude plugins marketplace list 2>/dev/null | grep -oP '(?<=❯ )\S+' || true)
         while IFS= read -r entry; do
@@ -105,7 +121,6 @@ restore_plugins() {
 
     # Install missing user-scoped plugins
     if [ -f "$manifests_dir/installed_plugins.json" ]; then
-        # plugin list uses "id" field
         local installed
         installed=$(claude plugins list --json 2>/dev/null | jq -r '.[].id' || true)
         while IFS= read -r plugin_key; do
@@ -124,37 +139,102 @@ restore_plugins() {
     fi
 }
 
-MODE="${1:-sync}"
+cmd_add_config() {
+    local name="${1:-}" url="${2:-}"
+    if [ -z "$name" ] || [ -z "$url" ]; then
+        echo "Usage: $0 add-config <name> <url>" >&2
+        exit 1
+    fi
+    local target="$CONFIG_DIR/$name"
+    if [ -e "$target" ]; then
+        echo "Config '$name' already exists at $target" >&2
+        exit 1
+    fi
+    log "Cloning '$url' into config/$name..."
+    git clone "$url" "$target"
+    log "Cloned. Run '$0 switch-config $name' to activate."
+}
 
-# Parse flags from remaining args
+cmd_switch_config() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        echo "Usage: $0 switch-config <name>" >&2
+        exit 1
+    fi
+    local target="$CONFIG_DIR/$name"
+    if [ ! -d "$target" ]; then
+        echo "Config '$name' not found. Available:" >&2
+        cmd_list_configs
+        exit 1
+    fi
+    ln -sfn "$name" "$CURRENT_LINK"
+    log "Switched to config '$name'."
+    log "~/.claude now points to: $(readlink -f "$CURRENT_LINK")"
+}
+
+cmd_list_configs() {
+    local active=""
+    if [ -L "$CURRENT_LINK" ]; then
+        active=$(basename "$(readlink "$CURRENT_LINK")")
+    fi
+    echo "Available configs:"
+    for d in "$CONFIG_DIR"/*/; do
+        local name
+        name=$(basename "$d")
+        [ "$name" = "current" ] && continue
+        if [ "$name" = "$active" ]; then
+            echo "  * $name (active)"
+        else
+            echo "    $name"
+        fi
+    done
+}
+
+# Parse mode and flags
+MODE="${1:-sync}"
 shift || true
+
+# For subcommands that take positional args, capture them before flag parsing
+SUBCMD_ARGS=()
+REMAINING=()
 for arg in "$@"; do
     case "$arg" in
         -v|--verbose) VERBOSE=1 ;;
-        *) echo "Unknown option: $arg" >&2; exit 1 ;;
+        -*) echo "Unknown option: $arg" >&2; exit 1 ;;
+        *) SUBCMD_ARGS+=("$arg") ;;
     esac
 done
 
 case "$MODE" in
+    add-config)
+        cmd_add_config "${SUBCMD_ARGS[@]:-}"
+        ;;
+    switch-config)
+        cmd_switch_config "${SUBCMD_ARGS[@]:-}"
+        ;;
+    list-configs)
+        cmd_list_configs
+        ;;
     push)
-        commit_local_changes
-        push_remote
+        REPO="$(active_config_dir)"
+        commit_local_changes "$REPO"
+        push_remote "$REPO"
         ;;
     pull)
-        commit_local_changes   # stash local work as a commit before merging
-        pull_remote
-        restore_plugins
+        REPO="$(active_config_dir)"
+        commit_local_changes "$REPO"
+        pull_remote "$REPO"
+        restore_plugins "$REPO"
         ;;
     sync)
-        commit_local_changes
-        pull_remote
-        restore_plugins
-        push_remote
+        REPO="$(active_config_dir)"
+        commit_local_changes "$REPO"
+        pull_remote "$REPO"
+        restore_plugins "$REPO"
+        push_remote "$REPO"
         ;;
     *)
-        echo "Usage: $0 [push|pull|sync] [-v]" >&2
+        echo "Usage: $0 [push|pull|sync|add-config <name> <url>|switch-config <name>|list-configs] [-v]" >&2
         exit 1
         ;;
 esac
-
-verbose "Done."

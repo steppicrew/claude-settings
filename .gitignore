@@ -5,21 +5,10 @@
 !.gitignore
 !README.md
 !CLAUDE.md
-!settings.json
 !sync.sh
 !install-alias.sh
 
-# Track project memory directories and their contents
-!projects/
-projects/*
-!projects/*/
-projects/*/*
-!projects/*/memory/
-!projects/*/memory/**
-
-# Track plugin manifests only (marketplaces and cache reinstalled on pull)
-!plugins/
-plugins/*
-!plugins/installed_plugins.json
-!plugins/known_marketplaces.json
-!plugins/blocklist.json
+# Track config dir (symlinks only, not contents — contents live in private repos)
+!config/
+config/*
+!config/current
