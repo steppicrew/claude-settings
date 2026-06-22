@@ -15,3 +15,10 @@ projects/*
 projects/*/*
 !projects/*/memory/
 !projects/*/memory/**
+
+# Track plugin manifests only (marketplaces and cache reinstalled on pull)
+!plugins/
+plugins/*
+!plugins/installed_plugins.json
+!plugins/known_marketplaces.json
+!plugins/blocklist.json
