@@ -1,0 +1,16 @@
+# Ignore everything by default
+*
+
+# Track these top-level files
+!.gitignore
+!README.md
+!CLAUDE.md
+!settings.json
+
+# Track project memory directories and their contents
+!projects/
+projects/*
+!projects/*/
+projects/*/*
+!projects/*/memory/
+!projects/*/memory/**
