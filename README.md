@@ -24,16 +24,13 @@ Public sync tooling for Claude Code configuration. Personal settings live in a s
 # 1. Clone this repo
 git clone git@github.com:steppicrew/claude-settings.git ~/git/claude-settings
 
-# 2. Add your private config repo
+# 2. Clone your private config repo
 ~/git/claude-settings/sync.sh add-config personal git@github.com:you/claude-settings-personal.git
 
-# 3. Switch to it (sets config/current symlink)
-~/git/claude-settings/sync.sh switch-config personal
-
-# 4. Point ~/.claude at the active config
+# 3. Point ~/.claude at the active config (config/current already points to personal/)
 ln -sfn ~/git/claude-settings/config/current ~/.claude
 
-# 5. Add the claude-sync shell alias
+# 4. Add the claude-sync shell alias
 ~/git/claude-settings/install-alias.sh
 source ~/.bash_aliases   # bash
 # source ~/.zshrc        # zsh
@@ -52,7 +49,7 @@ claude-sync -v        # verbose output
 
 ```bash
 claude-sync add-config work git@github.com:you/claude-settings-work.git
-claude-sync switch-config work    # re-points config/current and ~/.claude
+claude-sync switch-config work    # re-points config/current (~/.claude follows automatically)
 claude-sync list-configs          # show all configs, mark active
 ```
 
