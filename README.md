@@ -8,12 +8,17 @@ Public sync tooling for Claude Code configuration. Personal settings live in a s
 ~/git/claude-settings/       ← this repo (public): sync tooling only
   sync.sh
   install-alias.sh
+  claude-memory-init.sh
   config/
     personal/                ← private config repo (cloned via add-config)
       CLAUDE.md
       settings.json
-      plugins/
+      statusline.sh
+      plugins/               ← manifests only (marketplaces/cache re-fetched)
       projects/
+        <path-key>/memory/    ← real dir, or symlink into shared_memory/
+      shared_memory/
+        <remote-name>/memory/ ← name-keyed store shared across machines
     current -> personal/     ← symlink to active config
 ~/.claude -> config/current  ← Claude Code reads config from here
 ```
@@ -68,10 +73,12 @@ claude-sync list-configs          # show all configs, mark active
 |------|---------|
 | `CLAUDE.md` | Global instructions applied to all projects |
 | `settings.json` | Claude Code UI/behaviour settings |
+| `statusline.sh` | Custom status line script |
 | `plugins/installed_plugins.json` | Which plugins are installed |
 | `plugins/known_marketplaces.json` | Registered plugin marketplaces |
 | `plugins/blocklist.json` | Blocked plugins |
-| `projects/*/memory/` | Per-project auto-memory files |
+| `projects/*/memory/` | Per-project auto-memory — real dir, or symlink into `shared_memory/` |
+| `shared_memory/*/memory/` | Name-keyed memory stores shared across machines (see below) |
 
 Plugin marketplace dirs and cache are excluded — they are re-fetched on pull.
 
