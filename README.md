@@ -112,6 +112,36 @@ installed the alias.) On a **new machine**: clone the config, checkout the repo,
 run `claude-memory-init` in it — the symlink is recreated pointing at the
 already-synced `shared_memory/<name>`. No manual pairing.
 
+### Subdirectory scopes (monorepos)
+
+Claude keys memory by the directory it was **launched in**, not by the repo root.
+Open it in `<repo>/backend/` and that subdirectory gets its own path-key and its
+own memory — so a repo can have several independent memory scopes.
+
+Run the script from the subdirectory (or pass `--repo <repo>/backend`) to give
+such a scope a shared store. The name gains a `--<subpath>` suffix:
+
+```bash
+cd ~/path/to/monorepo/backend
+claude-memory-init                   # → <remote-name>--backend
+
+cd ~/path/to/monorepo/services/api
+claude-memory-init                   # → <remote-name>--services-api
+```
+
+The subpath is **repo-relative**, so it is identical on machines whose checkouts
+live at different absolute paths or under different directory names — the same
+property that makes the repo-root case work. Store dirs stay flat under
+`shared_memory/`, so the `.gitignore` rules are unaffected.
+
+Run it once per machine **per subdirectory you actually open Claude in**. A repo
+root and its subdirectories are **separate stores** and do not share memory with
+each other — pick the scope you want memory to live at. `--name` overrides the
+whole name, suffix included.
+
+Nested repos are not subdirectories: if the target dir has its own `.git`, its
+own remote decides the name and no suffix is added.
+
 **Merge review (hybrid).** The file union is safe but mechanical — it never
 overwrites and cannot judge meaning. When a merge is non-trivial (a divergent
 same-name file, or both sides already held memory), the script still unions
