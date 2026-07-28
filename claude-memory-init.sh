@@ -130,33 +130,28 @@ emit_merge_request() {
 REPO_DIR="${REPO_ARG:-$PWD}"
 [ -d "$REPO_DIR" ] || die "path not found: $REPO_DIR"
 
-# TARGET_DIR is LOGICAL (symlinks preserved, via 'cd -L' + 'pwd -L'), because the
-# path-key must match the path Claude itself sees as its CWD. Resolving symlinks
-# here would key the wrong dir: opening Claude in a symlinked  config/current
-# yields the key  …-config-current , not that of its physical target.
-TARGET_DIR="$(cd -L "$REPO_DIR" 2>/dev/null && pwd -L)" \
+# Everything below is PHYSICAL (symlinks resolved). Claude derives its project
+# key from the REAL path, not the shell's logical $PWD: on a machine where
+# ~/git symlinks to ~/workspace/git, a session launched via ~/git/foo is keyed
+# -home-user-workspace-git-foo. Keying off the logical path here would create a
+# symlink at a path Claude never reads, leaving the real memory unlinked and
+# forking — the exact failure this script exists to prevent.
+TARGET_DIR="$(cd -P "$REPO_DIR" 2>/dev/null && pwd -P)" \
     || die "cannot enter path: $REPO_DIR"
 TOPLEVEL="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null)" \
     || die "not inside a git repo: $TARGET_DIR"
+TOPLEVEL="$(cd -P "$TOPLEVEL" && pwd -P)"
 
-# Repo-relative subpath: '.' at the repo root, else e.g. 'services/api'.
-# Containment is tested on PHYSICAL paths (a logical path can sit outside the
-# repo while its target is inside, or vice versa), but the subpath itself is
-# taken from the logical pair so it reflects the names Claude/the user see.
-TARGET_PHYS="$(cd -P "$TARGET_DIR" && pwd -P)"
-TOPLEVEL_PHYS="$(cd -P "$TOPLEVEL" && pwd -P)"
-if [ "$TARGET_PHYS" = "$TOPLEVEL_PHYS" ]; then
+# Repo-relative subpath: '.' at the repo root, else e.g. 'services/api'. Both
+# sides are physical, so containment is exact and the subpath matches what
+# Claude's own key encodes.
+if [ "$TARGET_DIR" = "$TOPLEVEL" ]; then
     SUBPATH="."
-elif [ "${TARGET_DIR#"$TOPLEVEL"/}" != "$TARGET_DIR" ]; then
-    # Logical target sits under the logical toplevel — normal case.
-    SUBPATH="${TARGET_DIR#"$TOPLEVEL"/}"
-elif [ "${TARGET_PHYS#"$TOPLEVEL_PHYS"/}" != "$TARGET_PHYS" ]; then
-    # Only the physical paths nest: the target is reached through a symlink.
-    # Its physical subpath is the stable, cross-machine-comparable one.
-    SUBPATH="${TARGET_PHYS#"$TOPLEVEL_PHYS"/}"
-    warn "target reached via symlink; using physical subpath '$SUBPATH' for the store name."
 else
-    die "target dir is not inside its git toplevel: $TARGET_DIR"
+    SUBPATH="${TARGET_DIR#"$TOPLEVEL"/}"
+    # A no-op strip means the dir is not under TOPLEVEL — bail rather than
+    # silently building a store name from an absolute path.
+    [ "$SUBPATH" != "$TARGET_DIR" ] || die "target dir is not inside its git toplevel: $TARGET_DIR"
 fi
 [ "$SUBPATH" = "." ] || log "subpath: $SUBPATH"
 
@@ -222,7 +217,8 @@ CONFIG_BASE="$(resolve_base)"
 SHARED_MEM="$CONFIG_BASE/shared_memory/$NAME/memory"
 
 # ── Compute this machine's path-key for the target dir ────────────────────────
-# Claude uses the absolute path of its launch CWD with every '/' replaced by '-'.
+# Claude uses the REAL (symlink-resolved) absolute path of its launch CWD with
+# every '/' replaced by '-'. TARGET_DIR is already physical (see above).
 # This MUST key off TARGET_DIR, not TOPLEVEL: a session started in a subdirectory
 # gets that subdirectory's path-key, so keying off the repo root here would link
 # the wrong dir and leave the subdir's real memory unlinked and forking.

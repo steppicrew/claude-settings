@@ -16,7 +16,7 @@ This is the public sync tooling repo. Personal Claude Code configuration lives i
 - Symlinks are relative and point within the config repo; never rewrite them as absolute paths.
 - Store dirs stay **flat** under `shared_memory/` (depth 1). Subdirectory scopes encode the subpath in the *name* (`<remote>--services-api`), never as nested dirs — nesting would break the un-ignore rules above and the relative-symlink fallback.
 - The `--` subpath separator survives only because the suffix is appended *after* `derive_name`'s `tr -s '-'` squeeze. Reordering those collapses it to `-` and lets subdir stores collide.
-- The path-key must come from the **logical** path (symlinks preserved) to match Claude's CWD; containment/subpath checks use physical paths.
+- The path-key must come from the **physical** (symlink-resolved) path. Claude keys projects by the real path, not the shell's logical `$PWD` — with `~/git` → `~/workspace/git`, a session started via `~/git/foo` is keyed `-home-user-workspace-git-foo`. Using the logical path writes a symlink at a key Claude never reads.
 
 ## Git
 
