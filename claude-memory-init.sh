@@ -217,12 +217,25 @@ CONFIG_BASE="$(resolve_base)"
 SHARED_MEM="$CONFIG_BASE/shared_memory/$NAME/memory"
 
 # ── Compute this machine's path-key for the target dir ────────────────────────
-# Claude uses the REAL (symlink-resolved) absolute path of its launch CWD with
-# every '/' replaced by '-'. TARGET_DIR is already physical (see above).
+# Claude uses the REAL (symlink-resolved) absolute path of its launch CWD, with
+# separator characters replaced by '-'. TARGET_DIR is already physical (above).
+#
+# The set of folded characters is derived from OBSERVED Claude-authored keys
+# (dirs holding .jsonl transcripts — dirs holding only a memory/ symlink were
+# created by THIS script and prove nothing):
+#   '/' → '-'   universally observed
+#   '.' → '-'   observed: ~/…/AdventOfCode/2025.haskell is keyed
+#               …-AdventOfCode-2025-haskell , NOT …-2025.haskell
+#   '_' → '_'   NOT folded, kept verbatim: on stepmobil the key
+#               …-atb-WaterPro_CropDiv is the live one, while the dashed
+#               variant …-WaterPro-CropDiv existed only as an empty dir (no
+#               transcripts) and was removed. Do not add '_' here.
+# Keep the folded set in this ONE variable so it stays a one-character edit.
 # This MUST key off TARGET_DIR, not TOPLEVEL: a session started in a subdirectory
 # gets that subdirectory's path-key, so keying off the repo root here would link
 # the wrong dir and leave the subdir's real memory unlinked and forking.
-PATHKEY="$(echo "$TARGET_DIR" | sed 's:/:-:g')"
+PATHKEY_FOLD='./'
+PATHKEY="$(echo "$TARGET_DIR" | tr "$PATHKEY_FOLD" '--')"
 PROJ_DIR="$CLAUDE_HOME/projects/$PATHKEY"
 PROJ_MEM="$PROJ_DIR/memory"
 log "path-key: $PATHKEY"
