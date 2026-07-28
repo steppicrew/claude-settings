@@ -95,6 +95,16 @@ On a **new machine**: clone the config, checkout the repo, run
 `claude-memory-init.sh` in it — the symlink is recreated pointing at the
 already-synced `shared_memory/<name>`. No manual pairing.
 
+**Merge review (hybrid).** The file union is safe but mechanical — it never
+overwrites and cannot judge meaning. When a merge is non-trivial (a divergent
+same-name file, or both sides already held memory), the script still unions
+everything, preserves any dropped incoming copy as `<file>.incoming`, and writes
+a `MERGE-REQUEST.md` into the shared `memory/`. Because it lives in the memory
+dir, the next Claude Code session in that repo loads it; say **"resolve the
+pending memory merge"** and Claude reconciles contradictions/duplicates, resolves
+the `.incoming` pairs, then deletes `MERGE-REQUEST.md`. Clean merges skip all of
+this.
+
 Only `memory/` is touched — session `.jsonl` transcripts stay per-machine. The
 private config repo's `.gitignore` must un-ignore both `projects/*/memory` and
 `shared_memory/*/memory` **without** a trailing slash, or the symlink itself is

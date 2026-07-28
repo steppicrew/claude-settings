@@ -62,6 +62,49 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Write a MERGE-REQUEST.md into the shared store and print a paste-ready prompt,
+# asking Claude Code to semantically reconcile freshly-merged memory. Placed
+# inside memory/ so the next Claude session in this repo loads it automatically.
+emit_merge_request() {
+    local req="$SHARED_MEM/MERGE-REQUEST.md"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "[dry-run] would write merge-review request: $req"
+    else
+        {
+            echo "# Memory merge review needed"
+            echo
+            echo "\`claude-memory-init.sh\` merged this machine's memory for **$NAME**"
+            echo "(path-key \`$PATHKEY\`) into the shared store on $(date '+%Y-%m-%d %H:%M')."
+            echo "The union was mechanical — it never overwrites — so nothing was lost, but it"
+            echo "cannot judge meaning. Please reconcile:"
+            echo
+            echo "- **Contradictions** — two memories that disagree; keep the current one, delete the stale."
+            echo "- **Duplicates** — the same fact under different filenames/wordings; merge into one."
+            echo "- **Divergent same-name files** (listed below) — the shared copy was kept; the"
+            echo "  incoming version is preserved next to it as \`<file>.incoming\`. Diff the two,"
+            echo "  keep whichever is correct (or merge them), then remove the \`.incoming\`."
+            echo
+            if [ "${#CONFLICTS[@]}" -gt 0 ]; then
+                echo "## Divergent same-name files (shared kept; incoming saved as .incoming)"
+                echo
+                local c
+                for c in "${CONFLICTS[@]}"; do echo "- \`$c\` vs \`$c.incoming\`"; done
+                echo
+            fi
+            echo "## When done"
+            echo
+            echo "Prune/merge the fact files, resolve any \`.incoming\` pairs, update \`MEMORY.md\`"
+            echo "to match, then **delete this file** (\`MERGE-REQUEST.md\`) and run \`claude-sync\`."
+        } >"$req"
+        log "wrote merge-review request: shared_memory/$NAME/memory/MERGE-REQUEST.md"
+    fi
+    echo ""
+    echo "  ⚠ Memory merge review needed for '$NAME'."
+    echo "    Open this repo in Claude Code and say:"
+    echo "      \"resolve the pending memory merge\""
+    echo ""
+}
+
 # ── Resolve the repo checkout and its git toplevel ────────────────────────────
 REPO_DIR="${REPO_ARG:-$PWD}"
 [ -d "$REPO_DIR" ] || die "repo path not found: $REPO_DIR"
@@ -141,17 +184,45 @@ if [ ! -e "$SHARED_MEM/.gitkeep" ]; then
 fi
 
 # ── Merge any existing path-keyed memory into the shared store ─────────────────
+# The mechanical merge below is SAFE but DUMB: it unions files and never
+# overwrites, but it cannot judge semantic conflicts — stale facts, contradictions,
+# or the same fact reworded under a different filename. Whenever the merge is
+# non-trivial (a divergent same-name file, or BOTH sides already held memory) we
+# still do the safe union, then emit a MERGE-REQUEST.md asking Claude Code to
+# reconcile. That file lands inside the shared memory/ dir, so the next Claude
+# session in this repo loads it and can act on it. (Hybrid: auto for the clean
+# path, human/Claude judgment only where it's actually needed.)
+CONFLICTS=()          # same-name files whose content diverged
+SHARED_HAD_MEMORY=0   # shared store already held fact files before this run
+MERGED_ANY=0          # this run copied at least one file in
+
 if [ -d "$PROJ_MEM" ] && [ ! -L "$PROJ_MEM" ]; then
+    # Did the shared store already contain fact files (i.e. another machine
+    # populated it earlier)? If so, two independently-grown memory sets are
+    # coming together — worth a semantic review even with zero same-name clashes.
+    if find "$SHARED_MEM" -maxdepth 1 -type f -name '*.md' ! -name 'MEMORY.md' \
+            -print -quit 2>/dev/null | grep -q .; then
+        SHARED_HAD_MEMORY=1
+    fi
+
     log "merging existing $PATHKEY/memory → shared_memory/$NAME/memory"
     while IFS= read -r f; do
         base="$(basename "$f")"
         [ "$base" = "MEMORY.md" ] && continue
         dest="$SHARED_MEM/$base"
         if [ -e "$dest" ]; then
-            diff -q "$f" "$dest" >/dev/null 2>&1 || warn "CONFLICT (kept shared, review): $base"
+            if ! diff -q "$f" "$dest" >/dev/null 2>&1; then
+                warn "CONFLICT (kept shared, review): $base"
+                CONFLICTS+=("$base")
+                # Preserve the dropped incoming copy alongside so the review can
+                # actually compare — otherwise it vanishes when the path-keyed
+                # dir is replaced by the symlink below.
+                run "cp -p '$f' '$dest.incoming'"
+            fi
         else
             run "cp -p '$f' '$dest'"
             log "  + $base"
+            MERGED_ANY=1
         fi
     done < <(find "$PROJ_MEM" -maxdepth 1 -type f -name '*.md')
 
@@ -168,6 +239,11 @@ if [ -d "$PROJ_MEM" ] && [ ! -L "$PROJ_MEM" ]; then
             mv "$tmp" "$SHARED_MEM/MEMORY.md"
             log "  MEMORY.md unioned."
         fi
+    fi
+
+    # Decide whether a semantic review is warranted, and emit the request.
+    if [ "${#CONFLICTS[@]}" -gt 0 ] || { [ "$SHARED_HAD_MEMORY" -eq 1 ] && [ "$MERGED_ANY" -eq 1 ]; }; then
+        emit_merge_request
     fi
 fi
 
