@@ -1,20 +1,38 @@
 #!/usr/bin/env bash
-# Add claude-sync alias to shell config files.
+# Add claude-sync and claude-memory-init aliases to shell config files.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ALIAS_LINE="alias claude-sync='${SCRIPT_DIR}/sync.sh'"
-MARKER="# claude-sync alias"
+MARKER="# claude-settings aliases"
+
+# alias name → target script, added together under one marker block.
+ALIASES=(
+    "claude-sync=${SCRIPT_DIR}/sync.sh"
+    "claude-memory-init=${SCRIPT_DIR}/claude-memory-init.sh"
+)
 
 add_to_file() {
     local file="$1"
-    if grep -qF "claude-sync" "$file" 2>/dev/null; then
-        echo "  $file: already present, skipping."
+    # Append only aliases not already in the file, so re-running (or upgrading
+    # from a prior version that added only claude-sync) adds just what's missing.
+    local added=0 block="$MARKER"
+    local entry name target line
+    for entry in "${ALIASES[@]}"; do
+        name="${entry%%=*}"; target="${entry#*=}"
+        line="alias ${name}='${target}'"
+        if grep -qF "alias ${name}=" "$file" 2>/dev/null; then
+            continue
+        fi
+        block="$block"$'\n'"$line"
+        added=1
+    done
+    if [ "$added" -eq 0 ]; then
+        echo "  $file: all aliases already present, skipping."
         return
     fi
-    printf '\n%s\n%s\n' "$MARKER" "$ALIAS_LINE" >> "$file"
-    echo "  $file: alias added."
+    printf '\n%s\n' "$block" >> "$file"
+    echo "  $file: alias(es) added."
 }
 
 ensure_bash_aliases_sourced() {

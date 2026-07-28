@@ -30,10 +30,19 @@ git clone git@github.com:steppicrew/claude-settings.git ~/git/claude-settings
 # 3. Point ~/.claude at the active config (config/current already points to personal/)
 ln -sfn ~/git/claude-settings/config/current ~/.claude
 
-# 4. Add the claude-sync shell alias
+# 4. Add the shell aliases (claude-sync, claude-memory-init)
 ~/git/claude-settings/install-alias.sh
 source ~/.bash_aliases   # bash
 # source ~/.zshrc        # zsh
+```
+
+`install-alias.sh` is idempotent and adds both `claude-sync` and
+`claude-memory-init`. Re-run it after pulling an update that introduces a new
+alias — it appends only what's missing. Or add them by hand:
+
+```bash
+alias claude-sync='~/git/claude-settings/sync.sh'
+alias claude-memory-init='~/git/claude-settings/claude-memory-init.sh'
 ```
 
 ## Syncing
@@ -84,15 +93,16 @@ the one shared, git-tracked store.
 
 ```bash
 cd ~/path/to/your/repo               # run from inside the repo checkout
-claude-memory-init.sh --dry-run      # preview name + actions
-claude-memory-init.sh                # create/link the shared store (merges any
+claude-memory-init --dry-run         # preview name + actions
+claude-memory-init                   # create/link the shared store (merges any
                                      # existing path-keyed memory into it first)
-claude-memory-init.sh --name foo     # override the derived name (disambiguate)
+claude-memory-init --name foo        # override the derived name (disambiguate)
 claude-sync                          # commit + push the result
 ```
 
-On a **new machine**: clone the config, checkout the repo, run
-`claude-memory-init.sh` in it — the symlink is recreated pointing at the
+(Use `~/git/claude-settings/claude-memory-init.sh` directly if you haven't
+installed the alias.) On a **new machine**: clone the config, checkout the repo,
+run `claude-memory-init` in it — the symlink is recreated pointing at the
 already-synced `shared_memory/<name>`. No manual pairing.
 
 **Merge review (hybrid).** The file union is safe but mechanical — it never
