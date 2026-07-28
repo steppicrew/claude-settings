@@ -21,12 +21,25 @@
 #
 #   --name <name>    Override the derived store name (use to disambiguate two
 #                    repos that share a remote basename).
-#   --repo <path>    Target repo checkout (default: current directory's repo).
+#   --repo <path>    Target directory to key memory for — a repo checkout or any
+#                    subdirectory of one (default: current directory).
 #   --config <name>  Config under ~/git/claude-settings/config/ (default: active).
 #   --dry-run        Print actions, change nothing.
 #
+# Subdirectory scopes:
+#   Claude keys memory by the CWD it was launched in, not by the repo root. So a
+#   session started in  <repo>/backend/  gets its own path-key and its own memory.
+#   To give such a scope a shared store, run this script from that subdirectory
+#   (or pass --repo <repo>/backend). The store name gains a '--<subpath>' suffix:
+#     <remote-name>--backend        for  <repo>/backend
+#     <remote-name>--services-api   for  <repo>/services/api
+#   The subpath is repo-RELATIVE, so it is identical on machines whose checkouts
+#   live at different absolute paths. Run once per machine PER SUBDIRECTORY you
+#   actually open Claude in; a repo root and its subdirs are separate stores and
+#   do not share memory with each other.
+#
 # Notes:
-#   * Only the repo's memory/ dir is touched. Session .jsonl transcripts stay.
+#   * Only the target dir's memory/ dir is touched. Session .jsonl transcripts stay.
 #   * If the path-keyed memory/ already has content, it is MERGED into the shared
 #     store (never overwrites a divergent same-name file; MEMORY.md is unioned).
 #   * Idempotent: re-running when already linked is a no-op.
@@ -95,6 +108,11 @@ emit_merge_request() {
             echo
             echo "Prune/merge the fact files, resolve any \`.incoming\` pairs, update \`MEMORY.md\`"
             echo "to match, then **delete this file** (\`MERGE-REQUEST.md\`) and run \`claude-sync\`."
+            if [ "$SUBPATH" != "." ]; then
+                echo
+                echo "> Note: this store is scoped to the subdirectory \`$SUBPATH\` of the repo, not"
+                echo "> to the whole repo. Memory here should be about that scope."
+            fi
         } >"$req"
         log "wrote merge-review request: shared_memory/$NAME/memory/MERGE-REQUEST.md"
     fi
@@ -105,11 +123,42 @@ emit_merge_request() {
     echo ""
 }
 
-# ── Resolve the repo checkout and its git toplevel ────────────────────────────
+# ── Resolve the target dir, its git toplevel, and the repo-relative subpath ───
+# TARGET_DIR is what Claude keys memory by (its launch CWD) — it may be the repo
+# root or any subdirectory of it. TOPLEVEL is only used to look up the remote and
+# to compute SUBPATH; the two are deliberately NOT the same thing.
 REPO_DIR="${REPO_ARG:-$PWD}"
-[ -d "$REPO_DIR" ] || die "repo path not found: $REPO_DIR"
-TOPLEVEL="$(git -C "$REPO_DIR" rev-parse --show-toplevel 2>/dev/null)" \
-    || die "not inside a git repo: $REPO_DIR"
+[ -d "$REPO_DIR" ] || die "path not found: $REPO_DIR"
+
+# TARGET_DIR is LOGICAL (symlinks preserved, via 'cd -L' + 'pwd -L'), because the
+# path-key must match the path Claude itself sees as its CWD. Resolving symlinks
+# here would key the wrong dir: opening Claude in a symlinked  config/current
+# yields the key  …-config-current , not that of its physical target.
+TARGET_DIR="$(cd -L "$REPO_DIR" 2>/dev/null && pwd -L)" \
+    || die "cannot enter path: $REPO_DIR"
+TOPLEVEL="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null)" \
+    || die "not inside a git repo: $TARGET_DIR"
+
+# Repo-relative subpath: '.' at the repo root, else e.g. 'services/api'.
+# Containment is tested on PHYSICAL paths (a logical path can sit outside the
+# repo while its target is inside, or vice versa), but the subpath itself is
+# taken from the logical pair so it reflects the names Claude/the user see.
+TARGET_PHYS="$(cd -P "$TARGET_DIR" && pwd -P)"
+TOPLEVEL_PHYS="$(cd -P "$TOPLEVEL" && pwd -P)"
+if [ "$TARGET_PHYS" = "$TOPLEVEL_PHYS" ]; then
+    SUBPATH="."
+elif [ "${TARGET_DIR#"$TOPLEVEL"/}" != "$TARGET_DIR" ]; then
+    # Logical target sits under the logical toplevel — normal case.
+    SUBPATH="${TARGET_DIR#"$TOPLEVEL"/}"
+elif [ "${TARGET_PHYS#"$TOPLEVEL_PHYS"/}" != "$TARGET_PHYS" ]; then
+    # Only the physical paths nest: the target is reached through a symlink.
+    # Its physical subpath is the stable, cross-machine-comparable one.
+    SUBPATH="${TARGET_PHYS#"$TOPLEVEL_PHYS"/}"
+    warn "target reached via symlink; using physical subpath '$SUBPATH' for the store name."
+else
+    die "target dir is not inside its git toplevel: $TARGET_DIR"
+fi
+[ "$SUBPATH" = "." ] || log "subpath: $SUBPATH"
 
 # ── Derive the stable store name ──────────────────────────────────────────────
 # Priority: --name > sanitized full git remote URL > local dir name (unstable).
@@ -141,6 +190,16 @@ derive_name() {
     basename "$TOPLEVEL"
 }
 NAME="$(derive_name)"
+
+# Append the repo-relative subpath so each subdirectory scope gets its own store.
+# IMPORTANT: this runs AFTER derive_name's  tr -s '-'  squeeze, which is what lets
+# the '--' separator survive. If these are ever reordered, '--' collapses to '-'
+# and a subdir store can collide with a repo whose remote path ends in that same
+# segment. --name is a full override and is deliberately left unsuffixed.
+if [ -z "$NAME_OVERRIDE" ] && [ "$SUBPATH" != "." ]; then
+    NAME="$NAME--$(echo "$SUBPATH" | tr '/' '-')"
+fi
+
 # Sanitize: allow only safe filename chars.
 case "$NAME" in
     ""|*/*|.|..) die "derived store name is unsafe: '$NAME' — pass --name explicitly." ;;
@@ -162,9 +221,12 @@ CONFIG_BASE="$(resolve_base)"
 
 SHARED_MEM="$CONFIG_BASE/shared_memory/$NAME/memory"
 
-# ── Compute this machine's path-key for the repo ──────────────────────────────
-# Claude uses the absolute project path with every '/' replaced by '-'.
-PATHKEY="$(echo "$TOPLEVEL" | sed 's:/:-:g')"
+# ── Compute this machine's path-key for the target dir ────────────────────────
+# Claude uses the absolute path of its launch CWD with every '/' replaced by '-'.
+# This MUST key off TARGET_DIR, not TOPLEVEL: a session started in a subdirectory
+# gets that subdirectory's path-key, so keying off the repo root here would link
+# the wrong dir and leave the subdir's real memory unlinked and forking.
+PATHKEY="$(echo "$TARGET_DIR" | sed 's:/:-:g')"
 PROJ_DIR="$CLAUDE_HOME/projects/$PATHKEY"
 PROJ_MEM="$PROJ_DIR/memory"
 log "path-key: $PATHKEY"
