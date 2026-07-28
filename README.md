@@ -66,8 +66,34 @@ claude-sync list-configs          # show all configs, mark active
 
 Plugin marketplace dirs and cache are excluded — they are re-fetched on pull.
 
+## Sharing project memory across machines with different paths
+
+Claude keys each project's auto-memory dir by the project's **absolute path**
+(`projects/-home-you-git-myproject/memory/`). The same repo checked out at a
+different path on another machine (e.g. `…-workspace-git-myproject…`) gets a
+**separate** path-keyed dir. Both sync via git, but each machine only reads the
+one matching its own layout — so memory silently forks per machine.
+
+`link-memory.sh` fixes this: it picks the de-workspaced path-key as the
+canonical real `memory/` dir, merges the `-workspace-` twin's memory into it
+(union, never overwrites divergent files), then replaces the twin's `memory/`
+with a **relative symlink** → canonical. Git stores the symlink and recreates
+it on pull, so both path-keys resolve to one shared store on every machine.
+
+```bash
+./link-memory.sh --dry-run          # preview; auto-discovers all "-workspace-" pairs
+./link-memory.sh                    # apply to every pair
+./link-memory.sh <canon> <twin>     # link one explicit pair (dir names, no slashes)
+claude-sync                         # commit + push the result
+```
+
+Only `memory/` is touched — session `.jsonl` transcripts stay per-machine. The
+private config repo's `.gitignore` must un-ignore `projects/*/memory` **without**
+a trailing slash, or the symlink itself is dropped (a trailing-slash rule
+matches directories only).
+
 ## Notes
 
 - `~/.claude/.credentials.json` is excluded — authenticate per machine via `claude login`.
-- Project memory paths encode the absolute project path (e.g. `-home-you-git-myproject`). They load only on machines with matching directory layout, but sync harmlessly otherwise.
+- Project memory paths encode the absolute project path (e.g. `-home-you-git-myproject`). They load only on machines with matching directory layout — run `link-memory.sh` (above) to share one store across differing layouts.
 - Reference plugin scripts via `~/.claude/plugins/marketplaces/<plugin>/src/...`, never the cache path (hash varies per machine).
