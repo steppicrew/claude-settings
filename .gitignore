@@ -7,7 +7,7 @@
 !CLAUDE.md
 !sync.sh
 !install-alias.sh
-!link-memory.sh
+!claude-memory-init.sh
 
 # Track config dir (symlinks only, not contents — contents live in private repos)
 !config/

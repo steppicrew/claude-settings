@@ -70,30 +70,38 @@ Plugin marketplace dirs and cache are excluded — they are re-fetched on pull.
 
 Claude keys each project's auto-memory dir by the project's **absolute path**
 (`projects/-home-you-git-myproject/memory/`). The same repo checked out at a
-different path on another machine (e.g. `…-workspace-git-myproject…`) gets a
-**separate** path-keyed dir. Both sync via git, but each machine only reads the
-one matching its own layout — so memory silently forks per machine.
+different path — or under a slightly different directory name — on another
+machine gets a **separate** path-keyed dir. Both sync via git, but each machine
+only reads the one matching its own layout, so memory silently forks per machine.
 
-`link-memory.sh` fixes this: it picks the de-workspaced path-key as the
-canonical real `memory/` dir, merges the `-workspace-` twin's memory into it
-(union, never overwrites divergent files), then replaces the twin's `memory/`
-with a **relative symlink** → canonical. Git stores the symlink and recreates
-it on pull, so both path-keys resolve to one shared store on every machine.
+`claude-memory-init.sh` fixes this with a **name-keyed** store. It derives a
+stable name from the repo's git remote URL (host + path, sanitized — so it
+survives differing local dir names and even repos that share a basename), keeps
+the real memory under `shared_memory/<name>/memory/` in the config repo, and
+replaces this machine's path-keyed `memory/` dir with a **relative symlink** into
+it. Run it once in each checkout on each machine; every path-key then points at
+the one shared, git-tracked store.
 
 ```bash
-./link-memory.sh --dry-run          # preview; auto-discovers all "-workspace-" pairs
-./link-memory.sh                    # apply to every pair
-./link-memory.sh <canon> <twin>     # link one explicit pair (dir names, no slashes)
-claude-sync                         # commit + push the result
+cd ~/path/to/your/repo               # run from inside the repo checkout
+claude-memory-init.sh --dry-run      # preview name + actions
+claude-memory-init.sh                # create/link the shared store (merges any
+                                     # existing path-keyed memory into it first)
+claude-memory-init.sh --name foo     # override the derived name (disambiguate)
+claude-sync                          # commit + push the result
 ```
 
+On a **new machine**: clone the config, checkout the repo, run
+`claude-memory-init.sh` in it — the symlink is recreated pointing at the
+already-synced `shared_memory/<name>`. No manual pairing.
+
 Only `memory/` is touched — session `.jsonl` transcripts stay per-machine. The
-private config repo's `.gitignore` must un-ignore `projects/*/memory` **without**
-a trailing slash, or the symlink itself is dropped (a trailing-slash rule
-matches directories only).
+private config repo's `.gitignore` must un-ignore both `projects/*/memory` and
+`shared_memory/*/memory` **without** a trailing slash, or the symlink itself is
+dropped (a trailing-slash rule matches directories only).
 
 ## Notes
 
 - `~/.claude/.credentials.json` is excluded — authenticate per machine via `claude login`.
-- Project memory paths encode the absolute project path (e.g. `-home-you-git-myproject`). They load only on machines with matching directory layout — run `link-memory.sh` (above) to share one store across differing layouts.
+- Project memory paths encode the absolute project path (e.g. `-home-you-git-myproject`). They load only on machines with matching directory layout — run `claude-memory-init.sh` (above) to share one store across differing layouts.
 - Reference plugin scripts via `~/.claude/plugins/marketplaces/<plugin>/src/...`, never the cache path (hash varies per machine).
