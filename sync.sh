@@ -31,8 +31,34 @@ active_config_dir() {
     readlink -f "$CURRENT_LINK"
 }
 
+# Machine-written volatile fields that carry no cross-machine meaning:
+#   lastUpdated     — rewritten on every plugin refresh
+#   installLocation — an absolute path under $HOME, so it differs per machine
+# Left as written, they make every sync a diff and turn a timestamp (or a home
+# dir) into a merge conflict between machines. restore_plugins reads only
+# .source.source and .source.repo, never either of these.
+normalize_volatile() {
+    local repo_dir="$1"
+    command -v jq &>/dev/null || return 0
+
+    local f="$repo_dir/plugins/known_marketplaces.json"
+    [ -f "$f" ] || return 0
+
+    local tmp
+    tmp="$(mktemp)" || return 0
+    if jq -S 'walk(if type == "object" then del(.lastUpdated, .installLocation) else . end)' "$f" >"$tmp" 2>/dev/null \
+       && [ -s "$tmp" ]; then
+        if ! cmp -s "$f" "$tmp"; then
+            cat "$tmp" >"$f"
+            verbose "Normalized volatile fields in known_marketplaces.json."
+        fi
+    fi
+    rm -f "$tmp"
+}
+
 commit_local_changes() {
     local repo_dir="$1"
+    normalize_volatile "$repo_dir"
     git -C "$repo_dir" add -A
     if git -C "$repo_dir" diff --cached --quiet; then
         verbose "No local changes to commit."
