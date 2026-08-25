@@ -31,12 +31,18 @@ active_config_dir() {
     readlink -f "$CURRENT_LINK"
 }
 
-# Machine-written volatile fields that carry no cross-machine meaning:
-#   lastUpdated     — rewritten on every plugin refresh
-#   installLocation — an absolute path under $HOME, so it differs per machine
-# Left as written, they make every sync a diff and turn a timestamp (or a home
-# dir) into a merge conflict between machines. restore_plugins reads only
-# .source.source and .source.repo, never either of these.
+# known_marketplaces.json churns on every plugin refresh: lastUpdated is
+# rewritten each time and installLocation is an absolute path under $HOME, so
+# it differs per machine. Left alone, both make every sync a diff and turn
+# cosmetic bookkeeping into a merge conflict between machines.
+#
+# Both fields are REQUIRED by Claude Code's schema — deleting them corrupts the
+# marketplace config ("Invalid input: expected string, received undefined") and
+# breaks `claude plugins marketplace list`. So normalize the values instead of
+# removing the keys: pin the timestamp and replace $HOME with a placeholder that
+# denormalize_volatile() expands back on the way out.
+MARKETPLACE_EPOCH="1970-01-01T00:00:00.000Z"
+
 normalize_volatile() {
     local repo_dir="$1"
     command -v jq &>/dev/null || return 0
@@ -46,11 +52,44 @@ normalize_volatile() {
 
     local tmp
     tmp="$(mktemp)" || return 0
-    if jq -S 'walk(if type == "object" then del(.lastUpdated, .installLocation) else . end)' "$f" >"$tmp" 2>/dev/null \
+    if jq -S --arg home "$HOME" --arg epoch "$MARKETPLACE_EPOCH" '
+            walk(
+                if type == "object" then
+                    (if has("lastUpdated") then .lastUpdated = $epoch else . end)
+                    | (if has("installLocation")
+                       then .installLocation |= sub("^" + $home; "$HOME")
+                       else . end)
+                else . end
+            )' "$f" >"$tmp" 2>/dev/null \
        && [ -s "$tmp" ]; then
         if ! cmp -s "$f" "$tmp"; then
             cat "$tmp" >"$f"
             verbose "Normalized volatile fields in known_marketplaces.json."
+        fi
+    fi
+    rm -f "$tmp"
+}
+
+# Expand the placeholder back to a real path so Claude Code sees a valid file.
+denormalize_volatile() {
+    local repo_dir="$1"
+    command -v jq &>/dev/null || return 0
+
+    local f="$repo_dir/plugins/known_marketplaces.json"
+    [ -f "$f" ] || return 0
+
+    local tmp
+    tmp="$(mktemp)" || return 0
+    if jq -S --arg home "$HOME" '
+            walk(
+                if type == "object" and has("installLocation")
+                then .installLocation |= sub("^\\$HOME"; $home)
+                else . end
+            )' "$f" >"$tmp" 2>/dev/null \
+       && [ -s "$tmp" ]; then
+        if ! cmp -s "$f" "$tmp"; then
+            cat "$tmp" >"$f"
+            verbose "Expanded \$HOME in known_marketplaces.json."
         fi
     fi
     rm -f "$tmp"
@@ -111,6 +150,10 @@ push_remote() {
 restore_plugins() {
     local repo_dir="$1"
     [ "$PULLED" -eq 0 ] && return
+
+    # The committed file carries a $HOME placeholder; expand it before Claude
+    # Code (or the checks below) reads it.
+    denormalize_volatile "$repo_dir"
 
     if ! command -v jq &>/dev/null; then
         warn "jq not found — skipping plugin restore."
