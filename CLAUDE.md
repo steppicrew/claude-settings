@@ -21,6 +21,31 @@ This is the public sync tooling repo. Personal Claude Code configuration lives i
 - A scope whose path is **missing** is not stale — it is another machine's, synced in. Never offer to delete it; that would drop the other machine's memory.
 - The path-key must come from the **physical** (symlink-resolved) path. Claude keys projects by the real path, not the shell's logical `$PWD` — with `~/git` → `~/workspace/git`, a session started via `~/git/foo` is keyed `-home-user-workspace-git-foo`. Using the logical path writes a symlink at a key Claude never reads.
 
+## Config-sync invariants (do not break)
+
+The config repo's `.gitignore` is **deny-by-default** (`*`), so anything without an
+explicit `!` rule silently never syncs. The breakage never shows up on the machine
+that made the change — only on the *other* machine, as a hook pointing at a missing
+file or a skill that never loads.
+
+- **Every new root-level script needs its own `!name.sh` line.** This bit twice:
+  `block-remote-shell.sh` (a live `PreToolUse` hook named in `settings.json`) was
+  untracked, so the ssh-permission policy silently did not apply on the other machine.
+- **Skills are tracked whole, via `!skills/**`** — not just `SKILL.md`. Skills ship
+  helper scripts next to it (`browser.mjs`, `game.mjs`, `engines.md`); an allowlist
+  naming only `SKILL.md` drops those and the skill breaks with no error.
+- **A skill must be a real directory, never a symlink to one outside the config repo.**
+  Git stores only the link text, which dangles wherever the target is absent. Two
+  skills were symlinks into `~/.codegpt/skills/`; they are now real dirs. Note this is
+  the opposite rule from memory dirs, whose symlinks point *within* the repo and are
+  tracked deliberately.
+- **`!skills/*/` matches directories only**, so it excludes a symlinked skill before
+  any deeper rule is considered — the same trailing-slash trap as the memory rules.
+- `sync.sh`'s `check_untracked_config` enforces all of this before each commit: it
+  cross-checks scripts named in `settings.json` hook/`statusLine` commands, plus every
+  file under `skills/`, against `git ls-files`, and warns about any that are untracked.
+  It is report-only and never blocks a sync.
+
 ## Git
 
 - All commit messages must use conventional prefixes: `feat`, `fix`, `chore`, `fixup`, `refactor`, `docs`, `test`, etc.
