@@ -208,6 +208,19 @@ restore_plugins() {
     fi
 }
 
+# Sweep for memory scopes that are still machine-local and offer to share them.
+# Runs with --ask: it reports, and only links if the user says yes at the prompt
+# (falling back to report-only with no TTY), so a scripted sync never mutates
+# memory or blocks. --quiet keeps a clean sync silent when there is nothing to do.
+#
+# Placed BEFORE commit_local_changes in each mode so any newly-created symlinks
+# and shared stores land in the same commit as the rest of the sync.
+scan_memory() {
+    local scan="$SCRIPT_DIR/claude-memory-scan.sh"
+    [ -x "$scan" ] || return 0
+    "$scan" --ask --quiet || true
+}
+
 cmd_add_config() {
     local name="${1:-}" url="${2:-}"
     if [ -z "$name" ] || [ -z "$url" ]; then
@@ -286,17 +299,20 @@ case "$MODE" in
         ;;
     push)
         REPO="$(active_config_dir)"
+        scan_memory
         commit_local_changes "$REPO"
         push_remote "$REPO"
         ;;
     pull)
         REPO="$(active_config_dir)"
+        scan_memory
         commit_local_changes "$REPO"
         pull_remote "$REPO"
         restore_plugins "$REPO"
         ;;
     sync)
         REPO="$(active_config_dir)"
+        scan_memory
         commit_local_changes "$REPO"
         pull_remote "$REPO"
         restore_plugins "$REPO"

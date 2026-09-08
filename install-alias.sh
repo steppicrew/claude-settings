@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Add claude-sync and claude-memory-init aliases to shell config files.
+# Add claude-sync, claude-memory-init and claude-memory-scan aliases to shell config files.
 
 set -euo pipefail
 
@@ -10,6 +10,7 @@ MARKER="# claude-settings aliases"
 ALIASES=(
     "claude-sync=${SCRIPT_DIR}/sync.sh"
     "claude-memory-init=${SCRIPT_DIR}/claude-memory-init.sh"
+    "claude-memory-scan=${SCRIPT_DIR}/claude-memory-scan.sh"
 )
 
 add_to_file() {

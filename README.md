@@ -9,6 +9,7 @@ Public sync tooling for Claude Code configuration. Personal settings live in a s
   sync.sh
   install-alias.sh
   claude-memory-init.sh
+  claude-memory-scan.sh
   config/
     personal/                ← private config repo (cloned via add-config)
       CLAUDE.md
@@ -141,6 +142,56 @@ whole name, suffix included.
 
 Nested repos are not subdirectories: if the target dir has its own `.git`, its
 own remote decides the name and no suffix is added.
+
+### Finding scopes you forgot to share
+
+`claude-memory-init` shares **one** scope, and only if you remember to run it
+there. Scopes therefore pile up unshared: you work in a repo, Claude writes
+memory under its path-key, and it silently stays machine-local and forks.
+
+`claude-memory-scan.sh` sweeps `~/.claude/projects/` and reports every scope
+whose `memory/` is still a real directory instead of a symlink into the shared
+store. It **classifies** rather than guesses, because most leftovers cannot be
+shared automatically:
+
+| Class | Meaning | What happens |
+|-------|---------|--------------|
+| **shareable** | path exists here **and** is inside a git repo | offered for linking; `--link` shares it |
+| **not a git repo** | path exists but has no repo (e.g. a container dir like `~/git/rtl` holding sibling repos) | listed with a ready-to-paste `--name` command — you pick the name |
+| **skipped** | path does not exist here | another machine's scope, arrived via config sync; only counted |
+
+```bash
+claude-memory-scan.sh                 # report only (default)
+claude-memory-scan.sh --link          # share every 'shareable' scope
+claude-memory-scan.sh --ask           # report, then prompt (what sync uses)
+claude-memory-scan.sh --link --dry-run
+```
+
+Reversing a path-key back to a real path is ambiguous — Claude folds both `/`
+and `.` to `-`, and one directory name may span several key segments
+(`claude-settings` is two). The scanner resolves this by searching the
+filesystem with backtracking, preferring the longest match, so every split is
+confirmed by a directory that actually exists rather than guessed.
+
+**Not a git repo** stays manual on purpose: such a directory has no remote to
+derive a stable name from, and its local path differs per machine, so no
+automatic name would reproduce elsewhere — the exact forking this scheme
+prevents. Pick a name yourself and use the *same* one on every machine.
+
+#### Run during sync
+
+`claude-sync` (push/pull/sync) runs the scan first, with `--ask --quiet`:
+
+- Nothing shareable → prints **nothing**; a clean sync stays clean.
+- Shareable scopes found → lists them and asks whether to share now. Answer `n`
+  and nothing is touched.
+- No terminal (cron, piped) → degrades to report-only and never blocks.
+
+Only the actionable set is offered at a sync prompt; the `--name` cases are
+suppressed there (a bare `claude-memory-scan.sh` still lists them in full), since
+repeating an unfixable item every sync just trains you to ignore the block.
+Linking runs **before** the commit, so new symlinks and stores land in the same
+sync.
 
 **Merge review (hybrid).** The file union is safe but mechanical — it never
 overwrites and cannot judge meaning. When a merge is non-trivial (a divergent
