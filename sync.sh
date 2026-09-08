@@ -221,6 +221,110 @@ scan_memory() {
     "$scan" --ask --quiet || true
 }
 
+# Guard against the recurring "it worked here but not on the other machine" bug:
+# a file this config actively uses that git is not tracking. The repo .gitignore
+# is deny-by-default, so every new root-level script needs its own "!name" line;
+# forgetting one is silent, and the breakage only shows up on the other machine
+# (a hook pointing at a missing file, a skill that never loads).
+#
+# Two sources of truth, both mechanical:
+#   - scripts named in settings.json hook/statusLine "command" strings
+#   - every file under skills/
+# Report-only and never fatal: this warns, it does not block a sync.
+# Install the pre-commit hook into the active config repo.
+#
+# Git does NOT clone .git/hooks/, so a hook created on one machine simply does
+# not exist on the other — the very failure this hook guards against. The hook
+# body therefore lives as a tracked file in THIS repo (hooks/pre-commit.sh) and
+# is copied into place on every sync, so both machines converge.
+#
+# Never clobbers a hook this script did not write: an existing pre-commit that
+# lacks our marker line is left alone and reported.
+install_pre_commit_hook() {
+    local repo_dir="$1"
+    local src="$SCRIPT_DIR/hooks/pre-commit.sh"
+    local dest="$repo_dir/.git/hooks/pre-commit"
+    local marker="CLAUDE_SYNC_SKIP_SCRIPT_CHECK"
+
+    [ -f "$src" ] || return 0
+    [ -d "$repo_dir/.git/hooks" ] || return 0
+
+    if [ -f "$dest" ] && ! grep -q "$marker" "$dest" 2>/dev/null; then
+        warn "existing pre-commit hook at $dest is not ours; leaving it untouched."
+        return 0
+    fi
+
+    if ! cmp -s "$src" "$dest" 2>/dev/null; then
+        cp "$src" "$dest" && chmod +x "$dest"
+        verbose "Installed pre-commit hook into $(basename "$repo_dir")."
+    fi
+}
+
+check_untracked_config() {
+    local repo_dir="$1"
+    local -a missing=()
+    local f
+
+    # Scripts referenced by settings.json, with $HOME/~ prefixes stripped so the
+    # path is repo-relative. Needs python3 only for robust JSON walking; if it is
+    # unavailable the skills check below still runs.
+    if [ -f "$repo_dir/settings.json" ] && command -v python3 >/dev/null 2>&1; then
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            [ -e "$repo_dir/$f" ] || continue
+            git -C "$repo_dir" ls-files --error-unmatch "$f" >/dev/null 2>&1 \
+                || missing+=("$f  (referenced by settings.json)")
+        done < <(python3 - "$repo_dir/settings.json" <<'PYEOF'
+import json, re, sys
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(0)
+
+found = []
+def walk(node):
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if key == "command" and isinstance(val, str):
+                found.append(val)
+            else:
+                walk(val)
+    elif isinstance(node, list):
+        for item in node:
+            walk(item)
+
+walk(data)
+for cmd in found:
+    for tok in re.findall(r'[\w$~/.-]+\.(?:sh|mjs|js|py)', cmd):
+        tok = tok.strip('"\'')
+        tok = re.sub(r'^\$HOME/\.claude/|^~/\.claude/|^\$CLAUDE_[A-Z_]+/', '', tok)
+        if not tok.startswith(('/', '$', '~')):
+            print(tok)
+PYEOF
+        )
+    fi
+
+    # Every file under skills/ — helper scripts included, since a skill missing
+    # its .mjs is as broken as one missing SKILL.md.
+    if [ -d "$repo_dir/skills" ]; then
+        while IFS= read -r f; do
+            git -C "$repo_dir" ls-files --error-unmatch "$f" >/dev/null 2>&1 \
+                || missing+=("$f")
+        done < <(cd "$repo_dir" && find skills -type f -o -type l | sort)
+    fi
+
+    [ ${#missing[@]} -eq 0 ] && return 0
+
+    warn "these files are used by your config but are NOT tracked by git;"
+    warn "they will be missing on your other machines:"
+    for f in "${missing[@]}"; do
+        echo "    $f" >&2
+    done
+    warn "add a matching '!' rule to $repo_dir/.gitignore, then re-run."
+    return 0
+}
+
 cmd_add_config() {
     local name="${1:-}" url="${2:-}"
     if [ -z "$name" ] || [ -z "$url" ]; then
@@ -299,20 +403,26 @@ case "$MODE" in
         ;;
     push)
         REPO="$(active_config_dir)"
+        install_pre_commit_hook "$REPO"
         scan_memory
+        check_untracked_config "$REPO"
         commit_local_changes "$REPO"
         push_remote "$REPO"
         ;;
     pull)
         REPO="$(active_config_dir)"
+        install_pre_commit_hook "$REPO"
         scan_memory
+        check_untracked_config "$REPO"
         commit_local_changes "$REPO"
         pull_remote "$REPO"
         restore_plugins "$REPO"
         ;;
     sync)
         REPO="$(active_config_dir)"
+        install_pre_commit_hook "$REPO"
         scan_memory
+        check_untracked_config "$REPO"
         commit_local_changes "$REPO"
         pull_remote "$REPO"
         restore_plugins "$REPO"
