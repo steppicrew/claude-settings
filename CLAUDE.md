@@ -48,6 +48,6 @@ file or a skill that never loads.
 
 ## Git
 
-- All commit messages must use conventional prefixes: `feat`, `fix`, `chore`, `fixup`, `refactor`, `docs`, `test`, etc.
+- All commit messages must use conventional prefixes: `feat`, `fix`, `chore`, `refactor`, `docs`, `test`, etc. Fixes meant to be folded into an earlier commit use `git commit --fixup` (`fixup! ` subject), not a `fixup:` prefix — autosquash ignores the latter.
 - Format: `<prefix>: <short description>` (lowercase prefix)
 - Do NOT add `Co-Authored-By` trailers to commit messages
